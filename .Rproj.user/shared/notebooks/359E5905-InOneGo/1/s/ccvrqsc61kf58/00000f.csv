@@ -1,7 +1,0 @@
-"0","panel_custom <- function(x, y) {"
-"0","  points(x, y, pch = 20, cex = 0.5, col=c(disease_colors, control = '#FEF295')[as.character(scores[,21])])"
-"0","}"
-"0",""
-"0",""
-"0","png(""../Results/cPCA/gPCA_scores.png"", width = 6000, height = 4000, res = 300)"
-"0","pairs(scores[,1:5], panel = panel_custom,upper.panel = NULL)"

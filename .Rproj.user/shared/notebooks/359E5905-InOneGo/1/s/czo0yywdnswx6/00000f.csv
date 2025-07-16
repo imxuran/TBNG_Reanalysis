@@ -1,5 +1,0 @@
-"0","# List to store the data frames for each disease"
-"0","cohen_list <- lapply(data_list, calculate_cohens_d)"
-"0",""
-"0","# Reshape the datasets into a dataframe compatible with ggforestplot."
-"0","cohen_long <- bind_rows(cohen_list, .id = ""disease"")"

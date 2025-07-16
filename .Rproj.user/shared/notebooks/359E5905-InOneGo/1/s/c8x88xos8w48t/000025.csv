@@ -1,8 +1,0 @@
-"0",""
-"0","# Plot the chord diagram"
-"0",""
-"0","png(""../Results/SNF/chord_diagrams_total-euc.png"", width = 5000, height = 3000, res = 500)"
-"0",""
-"0","par(mfrow = c(1, 2), mar = c(1, 1, 1, 1)) "
-"0",""
-"0","cor_plot2(consensus_total_case)"

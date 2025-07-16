@@ -1,4 +1,0 @@
-"0",""
-"0","par(mfrow = c(2, 4), mar = c(1, 1, 1, 1)) "
-"0",""
-"0","cor_plot2(consensus_cancer_case, highlight_chord=c('CA1','MM'))"

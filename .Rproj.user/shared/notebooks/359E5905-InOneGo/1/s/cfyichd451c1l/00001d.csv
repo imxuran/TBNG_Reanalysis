@@ -1,2 +1,0 @@
-"0","# consensus matrix of autoimmune & inflammatory"
-"0","consensus_ai_control <- compute_SNF(similarity_control[names(similarity_control) %in% disease_types$AI])"

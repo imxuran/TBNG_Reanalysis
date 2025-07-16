@@ -1,6 +1,0 @@
-"0",""
-"0","## Merge plots"
-"0",""
-"0","# Merge 4 forest plots stored in the list with patchwork"
-"0","p <- (wrap_plots(c(list(p_age),list(p_sex),list(p_both)), ncol=3) + plot_annotation(tag_levels = 'A')) + plot_layout(guides = ""collect"") & "
-"0","  theme(legend.position = ""bottom"") "
