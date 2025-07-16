@@ -1,0 +1,5 @@
+"0",""
+"0","### Construct the consensus similarity matrix"
+"0",""
+"0","# total consensus matrix"
+"0","consensus_total_control <- compute_SNF(similarity_control)"

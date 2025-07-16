@@ -1,0 +1,3 @@
+"0","# consensus matrix of metabolic"
+"0","consensus_meta_control <- compute_SNF(similarity_control[names(similarity_control) %in% disease_types$M])"
+"0",""

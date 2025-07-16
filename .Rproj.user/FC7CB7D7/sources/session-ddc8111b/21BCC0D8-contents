@@ -1,0 +1,1902 @@
+---
+title: "TBNG_Reanalysis"
+format: html
+editor: visual
+---
+
+## Library
+
+```{r}
+library(UpSetR) # Upset plot
+library(ggforestplot) # Forest plot
+library(ggplot2) # Plot
+library(patchwork) # Combine plots
+library(tidyverse) # Data processing
+library(pheatmap) # Heatmap
+library(gridExtra) # Combine plots
+library(circlize) # Chord diagrams
+library(broom) # Convert into 'tidy' dataframe
+library(fmsb) # radar plot
+library(vegan) # mantel test
+library(RColorBrewer) # palette
+library(ggrepel) # Prevent label overlap
+library(ggExtra) # PCA: marginal density
+library(ggtext) # PCA: loadings magnitude
+library(FactoMineR) # DMFA
+library(SNFtool) # SNF
+library(WGCNA) # WGCNA
+library(limma) # WGCNA
+library(ComplexHeatmap) # WGCNA visualization
+```
+
+## 1. Read Files
+
+Read files from the folder.
+
+```{r}
+
+# Path of the derived and original data set
+files <- list.files(path = "../data/TBNG_data_part_I", pattern = "\\.rds$", full.names = TRUE)
+files_direct <- list.files(path = "../data/TBNG_data_part_II", pattern = "\\.rds$", full.names = TRUE)
+
+
+# Read data
+data_list <- lapply(files, readRDS)
+data_list_direct <- lapply(files_direct, readRDS)
+
+
+# Extract disease names for derived and original set
+disease_name <- sapply(basename(files), function(file) {
+  tail(strsplit(tools::file_path_sans_ext(file), "_")[[1]], 1)
+})
+
+disease_name_2 <- sapply(basename(files_direct), function(file) {
+  strsplit(tools::file_path_sans_ext(file), "_")[[1]][[2]]
+})
+
+
+# Assign name to every data frame stored in the list
+names(data_list) <- disease_name
+names(data_list_direct) <- unique(disease_name_2)
+
+```
+
+### PreProcess
+
+Define the variables used multiple times.
+
+```{r}
+
+## TYPES
+
+# Define the diseases from different types
+disease_types <- list(
+  C = c("MM", "CRC", "PC", "PDAC", "BC"),
+  AI = c("AIH","CD","UC","RA"),
+  INF = c("LMS","COVID19"),
+  M = c("T2D", "MASH")
+)
+
+# Define the derived traits from different Families
+families <- list(
+  Complexity = c("CA1", "CA2", "CA3", "CA4", "TC", "TM", "THy", "MM"),
+  Bisection = c("A2B", "CB", "TB", "A2FS0B"),
+  Galactosylation = c("A2FG", "A2FS0G", "A2G", "CG","A4G"),
+  Fucosylation = c("A1F", "A1Fa", "A2F", "A2Fa", "A3F", "A3Fa", "A4F", "A4Fa", "CF", "CFa", "TF"),
+  Sialylation = c("A2S", "A3S", "A4S", "CS", "TA1S", "TA2S", "TA3S", "TA4S"),
+  Sialylation_L = c("A1L", "A2L", "A3L", "A4L"),
+  Sialylation_E =c("A1E", "A2E", "A3E", "A4E")
+)
+
+
+
+## COLORS
+
+# Define the colors representing diseases
+disease_colors <- c(AIH = "#CBC9DA", RA = "#9D98BE", CD = "#6C64A2", UC = "#4C3E93", COVID19 = "#EA9C9D", LMS = "#DB6968", T2D = "#99CBEB", MASH = "#4D97CD", CRC = "#7D9F84", PC = "#93CC82", PDAC = "#74C476", MM = "#459943", BC = "#3B754A")
+
+# Define the colors representing disease types
+type_colors <- c(AI = "#9D98BE", INF = "#EA9C9D", M = "#99CBEB", C = "#93CC82")
+
+# Define the colors of different families
+family_colors <- c(Complexity = "#6BCCEF90", Bisection = "#00D187", Galactosylation = "#009462", Fucosylation = "#F6AF03", Sialylation = "#9C9C9C", Sialylation_L = "#951255", Sialylation_E = "#DB6968")
+
+
+
+## ORDERS
+
+# Specify the new order of traits and diseases, make traits/diseases from the same family/type together
+trait_order <- unlist(families)
+disease_order <- unlist(disease_types)
+
+
+
+## TRAITS
+
+# All present traits in 9 original datasets, filter out basic information, only keep traits whose name starting with 'H'
+all_direct_traits <- unique(grep("^H", unlist(lapply(data_list_direct, colnames)), value = TRUE))
+
+# Common derived traits in all datasets
+common_traits <- Reduce(intersect, lapply(data_list, names))
+common_traits <- common_traits[common_traits != "group"]
+
+# Exclude the "total" derived traits
+total_traits <- c("TA1S", "TA2S", "TA3S", "TA4S", "TA1", "TA2", "TA3", "TA4", "TF", "TB")
+#total_traits <- c("TA1S", "TA2S", "TA3S", "TA4S", "TA1", "TA2", "TA3", "TA4", "TF", "TB", "CB")
+
+# Traits used in analysis (common traits excluding 'total' traits)
+analy_traits <- setdiff(common_traits,total_traits)
+```
+
+## 2. UpSet Plot
+
+Prepare the dataset using direct datasets for plotting.
+
+```{r}
+
+# Create a binary matrix to indicate trait presence, check which traits from all_traits are present in the current disease dataframe
+trait_presence_matrix <- sapply(data_list_direct, function(x) {
+  as.integer(all_direct_traits %in% colnames(x))
+})
+
+trait_presence_df <- as.data.frame(trait_presence_matrix)
+
+rownames(trait_presence_df) <- all_direct_traits
+
+```
+
+Plot the UpSet plot.
+
+```{r}
+
+sets <- unique(ifelse(disease_order %in% c('CD', 'UC'), 'IBD', disease_order))
+types <- rep(names(disease_types), sapply(disease_types, length))
+types <- types[-match("AI", types)]
+metadata <- as.data.frame(cbind(sets, types))
+names(metadata) <- c("sets", "disease")
+
+png("../Results/Compositions_Upset.png", width = 5500, height = 4000, res = 500)
+
+upset(trait_presence_df, nintersects = 10, 
+      point.size = 2.7, line.size = 1, 
+      mainbar.y.label = "Intersections",
+      sets.x.label = "Glycan Compositions", 
+      text.scale = c(1.5, 1.5, 1.3, 1.5, 1.5, 1.5), 
+      matrix.color = "#0074B3", sets.bar.color = "#F47720", main.bar.color = "#F47720",
+      keep.order = TRUE, order.by = "freq", sets = sets,
+      #sets = c("AIH", "IBD", "RA", "LMS", "COVID19", "T2D", "MASH", "BC", "CRC", "MM", "PC"),
+      set.metadata = list(data = metadata, plots = list(
+        list(type = "text", column = "disease", assign = 3, colors = type_colors, title = NULL),
+        list(type = "heat", column = "disease", assign = 7, colors = type_colors, alpha = 0.5, title = NULL),
+        list(type = "matrix_rows", column = "disease", colors = type_colors, alpha = 0.5))),
+      queries = list(list(query = intersects, params = sets, color="#0074B3",  active = T))
+      )
+
+
+dev.off()
+
+```
+
+## 3. Statistic test
+
+### i) Pooled control dataset
+
+```{r}
+
+### Pool all control dataset together
+
+
+
+data_list <- lapply(data_list, function(df) {
+  # Rename all age columns as "age", some are 'Age' / 'AGE'
+  df <- rename_with(df, tolower, .cols = matches("^age$", ignore.case = TRUE))
+  names(df)[str_detect(names(df), regex("sex", ignore_case = TRUE))] <- "sex"
+  # Convert a factor to numeric if 'age' exsits
+  if ("age" %in% colnames(df)) {
+    df$age <- as.numeric(as.character(df$age))
+  }
+  return(df)
+})
+
+
+# Combine all dataframes
+df <- bind_rows(data_list)
+
+
+# Only keep control group, column: age, sex, common traits
+df <- df[df$group=='control', c("age","sex", common_traits)] %>%
+  # Standardize sex column
+  mutate(sex = case_when(
+    sex %in% c('female', 'F') ~ 1,
+    sex %in% c('male', 'M') ~ 0,
+    TRUE ~ NA_real_
+  ))
+
+
+# Remove rows without age or sex
+df <- na.omit(df)
+
+# Standardize all traits
+df_std <- cbind(df[,1:2],scale(df[,-(1:2)]))
+
+```
+
+### ii) Models
+
+```{r}
+
+# Create new dataframes to store the results of three models
+col_names <- c("trait", "estimate", "SE", "stas", "p_value", "CI_lower", "CI_upper")
+age_df <- data.frame(matrix(ncol = length(col_names), nrow = 0))
+colnames(age_df) <- col_names
+sex_df <- data.frame(matrix(ncol = length(col_names), nrow = 0))
+colnames(sex_df) <- col_names
+both_df <- data.frame(matrix(ncol = length(col_names), nrow = 0))
+colnames(both_df) <- col_names
+
+
+
+for (t in common_traits) {
+  
+  # Linear model for age
+  lm_age <- lm(as.formula(paste("age ~", t)), data = df_std)
+  age_df[nrow(age_df) + 1, ] <- tidy(lm_age, conf.int = TRUE, exponentiate = FALSE) %>%
+    filter(term != "(Intercept)")
+  
+
+  # Logistic regression model for sex
+  lm_sex <- glm(as.formula(paste("sex ~", t)), family = binomial, data = df_std)
+  sex_df[nrow(sex_df) + 1, ] <- tidy(lm_sex, conf.int = TRUE, exponentiate = TRUE) %>%
+    filter(term != "(Intercept)")
+  
+  
+  # Linear models with interaction terms
+  lm_both <- lm(as.formula(paste("age ~", t, "* sex")), data = df_std)
+  both_df[nrow(both_df) + 1, ] <- tidy(lm_both, conf.int = TRUE, exponentiate = FALSE) [4,]
+  
+}
+
+
+# Reorder the daraframes based on the absolute value of the estimates
+age_df <- age_df[order(abs(age_df$estimate), decreasing = TRUE), ]
+sex_df <- sex_df[order(abs(sex_df$estimate), decreasing = TRUE), ]
+both_df <- both_df[order(abs(both_df$estimate), decreasing = TRUE), ]
+both_df$trait<-sub(":sex$", "", both_df$trait)
+
+```
+
+### iii) Forest Plots
+
+```{r}
+
+all_logp <- c(-log10(age_df$p_value), -log10(sex_df$p_value), -log10(both_df$p_value))
+color_limits <- range(all_logp, na.rm = TRUE)
+
+p_age <- age_df[1:12,] %>% 
+  ggplot(aes(x=estimate, y=trait)) + 
+  geom_effect(ggplot2::aes(xmin = CI_lower, xmax = CI_upper, colour = -log10(p_value), shape = 'fixed'), fatten = 6, position = ggstance::position_dodgev(height = 0.5)) + 
+  geom_errorbarh(aes(xmin = CI_lower, xmax = CI_upper, colour = -log10(p_value)), height = 0.2) +
+  theme_forest() + 
+  geom_vline(xintercept = 0, color = "red", linetype = "dashed", cex = 1, alpha = 0.5) + 
+  scale_color_gradientn(colors = c("#33A02C", "#FB9A99", "#1F78B4", "#CAB2D6", "#FFF123") , limits = color_limits) +
+  scale_shape_manual(values = c("fixed" = 18)) +
+  xlim(-8,8) +
+  labs(title = expression("age" %~% "glycosylation trait"), x = "std.estimates (95% CI)") +
+  guides(shape = "none") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"), legend.position = "bottom")
+
+p_sex <- sex_df[c(1:6,15:20),] %>% 
+  ggplot(aes(x=estimate, y=trait)) + 
+  geom_effect(ggplot2::aes(xmin = CI_lower, xmax = CI_upper, colour = -log10(p_value), shape = 'fixed'), fatten = 6, position = ggstance::position_dodgev(height = 0.5)) + 
+  geom_errorbarh(aes(xmin = CI_lower, xmax = CI_upper, colour = -log10(p_value)), height = 0.2) +
+  theme_forest() + 
+  geom_vline(xintercept = 1, color = "red", linetype = "dashed", cex = 1, alpha = 0.5) +  
+  scale_color_gradientn(colors = c("#33A02C", "#FB9A99", "#1F78B4", "#CAB2D6", "#FFF123") , limits = color_limits) +
+  scale_shape_manual(values = c("fixed" = 18)) +
+  xlim(0, 2) + labs(title = expression("sex" %~% "glycosylation trait"), x = "odds ratios (95% CI)") +
+  guides(shape = "none") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"), legend.position = "bottom")
+
+p_both <- both_df[1:12,] %>% 
+  ggplot(aes(x=estimate, y=trait)) + 
+  geom_effect(ggplot2::aes(xmin = CI_lower, xmax = CI_upper, colour = -log10(p_value), shape = 'fixed'), fatten = 6, position = ggstance::position_dodgev(height = 0.5)) + 
+  geom_errorbarh(aes(xmin = CI_lower, xmax = CI_upper, colour = -log10(p_value)), height = 0.2) +
+  theme_forest() + 
+  geom_vline(xintercept = 0, color = "red", linetype = "dashed", cex = 1, alpha = 0.5) + 
+  scale_color_gradientn(colors = c("#33A02C", "#FB9A99", "#1F78B4", "#CAB2D6", "#FFF123") , limits = color_limits) +
+  scale_shape_manual(values = c("fixed" = 18)) +
+  xlim(-8, 8) + labs(title = expression("age" %~% "glycosylation trait * sex"), x = "std.estimates (95% CI)") +
+  guides(shape = "none") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"), legend.position = "bottom")
+
+#scale_color_gradient2(low = "#33A02C", mid = "#FB9A99", high = "#1F78B4", midpoint = 40, limits = color_limits) 
+
+p <- p_age + p_sex + p_both
+```
+
+```{r}
+
+## Merge plots
+
+# Merge 4 forest plots stored in the list with patchwork
+p <- (wrap_plots(c(list(p_age),list(p_sex),list(p_both)), ncol=3) + plot_annotation(tag_levels = 'A')) + plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom") 
+#& guides(color = guide_legend(nrow = 1, override.aes = list(size = 3)), shape = guide_legend(nrow = 1, override.aes = list(size = 3)))
+
+# Save the combined plot
+ggsave("../Results/Stat.png", plot = p, width = 12, height = 8 , units = "in", dpi = 500)
+
+```
+
+## 4. Effect Size
+
+Calculate the Cohen'D and standard error, including confidence interval.
+
+### 1) Effect Size Calculation
+
+```{r}
+
+### Calculate the effect size, obtain one list including information on cohen'd, SE and CI for each dataset.
+
+# Function to calculate the baised std
+biased_sd <- function(x) {
+  sqrt(sum((x - mean(x))^2) / length(x))
+}
+
+# Function to calculate Cohen's d and related statistics
+calculate_cohens_d <- function(df) {
+  
+  # Select numeric columns excluding age
+  numeric_cols <- sapply(df, is.numeric) & !(tolower(names(df)) %in% c("age","weight","height","pdac_binary","severity_score","sample id"))
+  
+  # Get two groups, only save the traits
+  case <- df[df$group=="case", numeric_cols]
+             #intersect(colnames(df), setdiff(trait_order,total_traits))]
+  control <- df[df$group=="control", numeric_cols]
+                #intersect(colnames(df), setdiff(trait_order,total_traits))]
+  
+  # Calculate means, biased standard deviations, and sample sizes
+  mean_case <- apply(case, 2, mean)
+  mean_control <- apply(control, 2, mean)
+  sd_case <- apply(case, 2, biased_sd)
+  sd_control <- apply(control, 2, biased_sd)
+  len_case <- nrow(case)
+  len_control <- nrow(control)
+  
+  # Calculate pooledSD, Cohen's d, standard error, and confidence intervals
+  poolSd <- sqrt( ((len_case-1) * sd_case^2 + (len_control-1) * sd_control^2)  / (len_case+len_control-2) )
+  cohenD <- (mean_case - mean_control) / poolSd
+  SE_d <- sqrt( (len_case + len_control)/(len_case * len_control) + cohenD^2/(2*(len_case+len_control)) )
+  CI_lower <- cohenD - 1.96 * SE_d
+  CI_upper <- cohenD + 1.96 * SE_d
+
+  # Return a data frame for each disease with traits as rownames and stats as columns
+  data.frame(
+    trait = colnames(case),
+    cohen_d = cohenD,
+    SE = SE_d,
+    CI_lower = CI_lower,
+    CI_upper = CI_upper
+  )
+}
+
+```
+
+Calculate Cohen's d.
+
+```{r}
+# List to store the data frames for each disease
+cohen_list <- lapply(data_list, calculate_cohens_d)
+
+# Reshape the datasets into a dataframe compatible with ggforestplot.
+cohen_long <- bind_rows(cohen_list, .id = "disease")
+```
+
+Get traits with the strongest effect sizes.
+
+```{r}
+
+pos3_list <- lapply(cohen_list, function(df) {
+  df <- df[!(rownames(df) %in% total_traits),] # Remove 'severity_score' and 'total' traits
+  rownames(df)[order(as.numeric(df[,2]), decreasing = TRUE)[1:5]] # Get top 3 positive values
+})
+
+neg3_list <- lapply(cohen_list, function(df) {
+  df <- df[!(rownames(df) %in% total_traits),]
+  rownames(df)[order(as.numeric(df[,2]), decreasing = FALSE)[1:5]]
+})
+
+# Assign names to the lists
+names(pos3_list) <- disease_name
+names(neg3_list) <- disease_name
+
+# Get unique values across all lists
+pos3 <- unique(unlist(pos3_list))
+neg3 <- unique(unlist(neg3_list))
+
+```
+
+### 3) Forest Plot
+
+Add the metadata.
+
+```{r}
+
+# Create a new column 'family' for disease family in the dataframe
+cohen_long$family <- NA
+for (family_name in names(families)) {
+  cohen_long$family[cohen_long$trait %in% families[[family_name]]] <- family_name
+}
+
+# Create a new column 'type' for trait family in the dataframe
+cohen_long$type <- NA
+for (disease_type in names(disease_types)) {
+  cohen_long$type[cohen_long$disease %in% disease_types[[disease_type]]] <- disease_type
+}
+
+# Reorder the factor levels to adjust legend order
+cohen_long$disease <- factor(cohen_long$disease, levels = disease_order)
+
+
+# Keep only the strongest effect sizes
+subset_pos_cohen <- do.call(rbind, lapply(names(pos3_list), function(disease_name) {
+  subset(cohen_long, disease == disease_name & trait %in% pos3_list[[disease_name]])
+}))
+
+subset_neg_cohen <- do.call(rbind, lapply(names(neg3_list), function(disease_name) {
+  subset(cohen_long, disease == disease_name & trait %in% neg3_list[[disease_name]])
+}))
+
+subset_cohen <- rbind(subset_pos_cohen, subset_neg_cohen)
+```
+
+```{r}
+
+# Group the families, determine families in each picture
+split_list <- list(
+  c("Complexity"),
+  c("Fucosylation"),
+  c(  "Galactosylation", "Sialylation"),
+  c("Bisection","Sialylation_L", "Sialylation_E")
+)
+
+# List to store the forest plots
+forest_list <- list()
+
+# and now follows a buildup of a plot 
+for (n in split_list) {
+  p <- subset_cohen %>% 
+    filter(trait %in% union(pos3,neg3)) %>% 
+    filter(family %in% n) %>% 
+    ggplot(aes(x=cohen_d, y=trait)) + 
+    geom_effect(ggplot2::aes(xmin = CI_lower, xmax = CI_upper, colour = disease, shape = disease), fatten = 6, position = ggstance::position_dodgev(height = 0.5)) + 
+    scale_color_manual(values = disease_colors) + 
+    scale_shape_manual(values = c(RA = 19, AIH = 19, UC = 17, CD = 15, LMS = 17, COVID19 = 15, MASH = 19, T2D = 17, BC = 15, CRC = 19, MM = 17, PC = 15, PDAC = 17)) +
+    theme_forest() + 
+    geom_stripes(odd = "#33333333", even = "#00000000") +
+    geom_vline(xintercept = 0, color = "black", linetype = "dashed", cex = 1, alpha = 0.5) +  
+    ggforce::facet_col(facets = ~ family, scales = "free_y", space = "free") + 
+    xlim(-4, 4) + xlab("Cohen's D (CI)") + ylab("Glyco traits") 
+  
+  # As the legends might be not identical, so this approach isn't working. 
+  if (length(unique((subset_cohen %>% filter(family %in% n))$disease))==13) {
+    p <- p + theme( legend.position = "bottom") + guides(color = guide_legend(nrow = 1, override.aes = list(size = 3)))
+  } else {
+    p <- p + guides(color = "none", fill = "none", shape = "none")
+  }
+    
+  forest_list <- append(forest_list,list(p))
+}
+
+```
+
+```{r}
+
+## Merge plots
+
+# Merge 4 forest plots stored in the list with patchwork
+p <- (wrap_plots(forest_list, ncol=4) + plot_annotation(tag_levels = 'A')) + plot_layout(guides = "collect") & 
+  theme(legend.position = "bottom") 
+#& guides(color = guide_legend(nrow = 1, override.aes = list(size = 3)), shape = guide_legend(nrow = 1, override.aes = list(size = 3)))
+
+# Save the combined plot
+ggsave("../Results/EffectSize_ForestPlot.png", plot = p, width = 12, height = 8 , units = "in", dpi = 500)
+
+```
+
+### 4) Cluster on the effect size
+
+```{r}
+
+cohen_df <- do.call(cbind,lapply(cohen_list,function(x) x[intersect(trait_order, union(pos3,neg3)),2]))
+
+rownames(cohen_df) <- intersect(trait_order, union(pos3,neg3))
+
+cohen_df[is.na(cohen_df)] <- 0
+
+
+ann_row_group <- sapply(rownames(cohen_df), function(x) {
+  names(families)[which(sapply(families, function(f) x %in% f))]
+})
+ann_row <- as.data.frame(ann_row_group)
+colnames(ann_row) <- c("Trait")
+
+ann_col_group <- sapply(colnames(cohen_df), function(x) {
+  names(disease_types)[which(sapply(disease_types, function(f) x %in% f))]
+})
+ann_col <- as.data.frame(ann_col_group)
+colnames(ann_col) <- c("Disease")
+
+
+ann_colors = list(
+    Trait = family_colors,
+    Disease = type_colors
+)
+
+data_range <- max(abs(c(min(cohen_df, na.rm = TRUE), 
+                       max(cohen_df, na.rm = TRUE))))
+breaks <- seq(-data_range, data_range, length.out = 101)
+
+
+png("../Results/EffectSize_Heatmap.png", width = 3200, height = 2400, res = 300)
+
+pheatmap::pheatmap(cohen_df, cluster_rows = TRUE, cluster_cols = TRUE,
+         show_rownames = TRUE, show_colnames = TRUE, 
+         annotation_row = ann_row,
+         annotation_col = ann_col,
+         annotation_colors = ann_colors, 
+         border_color = NA,
+         #breaks = breaks,
+         clustering_distance_rows = "correlation",
+         main = 'Effect Size Heatmap')
+
+dev.off()
+
+```
+
+## 5. SNF (Consensus similarity matrix)
+
+### 1) Similarity Matrices for each group
+
+#### Similarity computation function
+
+```{r}
+
+# Functions to compute similarity
+compute_similarity <- function(data, method = "correlation", non_negative = TRUE) {
+  if (method == "correlation") {
+    corr_matrix <- cor(data, use = "pairwise.complete.obs")
+    
+    if (non_negative) {
+      similarity_matrix <- (corr_matrix + 1) / 2  # Scale to [0, 1]
+    } else {
+      similarity_matrix <- corr_matrix 
+    }
+   #similarity_matrix <- 1 - similarity_matrix
+   
+  } else if (method == "euclidean") {
+   
+    dist_matrix <- as.matrix(dist(t(data), method = "euclidean"))  
+    similarity_matrix <- 1 / (1 + dist_matrix) 
+    
+  } else if (method == "mahalanobis") {
+    
+    dist_matrix <- as.matrix(vegdist(t(data), method = "mahalanobis"))
+    
+    similarity_matrix <- 1 / (1 + dist_matrix)
+    
+
+  } else {
+    stop("Unknown method. Choose 'correlation' or 'euclidean'")
+  }
+  
+  
+  # Reorder the columns and rows of the matrix based on the new order defined above
+  similarity_matrix <- similarity_matrix[intersect(trait_order,rownames(similarity_matrix)),intersect(trait_order,rownames(similarity_matrix))]
+  
+  return(similarity_matrix)
+}
+
+```
+
+#### i) Case Group
+
+```{r}
+
+### Calculate variable similarity matrices per dataset
+
+# Only keep case group
+case_list <- lapply(data_list, function(df) {
+  df<-df[df$group=='case', analy_traits]
+})
+
+# list to keep similarity matrix of each dataset
+similarity_case <- list()
+
+# Pearson used in the calculation
+for (df in case_list) {
+
+  s <- compute_similarity(df)
+  
+  similarity_case <- append(similarity_case, list(s))
+}
+
+names(similarity_case) <- disease_name
+```
+
+#### ii) Control Group
+
+```{r}
+
+### Calculate variable similarity matrices per dataset
+
+# Only keep control group
+control_list <- lapply(data_list, function(df) {
+  df<-df[df$group=='control', analy_traits]
+})
+
+# list to keep similarity matrix of each dataset
+similarity_control <- list()
+
+# Pearson used in the calculation
+for (df in control_list) {
+  
+  s <- compute_similarity(df)
+  
+  similarity_control <- append(similarity_control, list(s))
+}
+
+names(similarity_control) <- disease_name
+```
+
+### 2) Similarity Matrix Fusion
+
+#### SNF computation function
+
+```{r}
+
+# Functions to construct the consensus similarity matrix
+compute_SNF <- function(similarity_list) {
+  K = 7		# number of neighbors
+  alpha = 0.5  	# hyperparameter
+  T = 10 	# Number of Iterations
+  
+  #truelabel = list() ##the ground truth of the simulated data;
+  
+  #similarity_list = lapply(similarity_list, standardNormalization)
+  
+  wlist <- list()  # Store similarity graphs
+  
+  for (d in similarity_list) {
+    #d <- dist2(as.matrix(t(s)),as.matrix(t(s)))
+    w <- affinityMatrix(d, K, alpha) # Computes the affinity matrix for a given distance matrix
+    wlist <- append(wlist, list(w))
+  }
+  
+  
+  W <- SNF(wlist, K, T)  # Compute the overall network
+
+  C = 5		# number of clusters
+  group <- spectralClustering(W, C) 	# the final subtypes information
+  
+  col = getColorsForGroups(group, colors = colorRampPalette(brewer.pal(9, "Paired"))(9))
+  
+  displayClustersWithHeatmap(W, group, col = colorRampPalette(brewer.pal(9, "Purples"))(50), ColSideColors=col)
+  
+  return(W)
+}
+
+```
+
+#### i) Case Group
+
+```{r}
+
+### Construct the consensus similarity matrix
+
+# total consensus matrix
+consensus_total_case <- compute_SNF(similarity_case)
+# consensus matrix of cancer
+consensus_cancer_case <- compute_SNF(similarity_case[names(similarity_case) %in% disease_types$C])
+# consensus matrix of autoimmune & inflammatory
+consensus_ai_case <- compute_SNF(similarity_case[names(similarity_case) %in% disease_types$AI])
+# consensus matrix of infectious
+consensus_inf_case <- compute_SNF(similarity_case[names(similarity_case) %in% disease_types$INF])
+# consensus matrix of metabolic
+consensus_meta_case <- compute_SNF(similarity_case[names(similarity_case) %in% disease_types$M])
+
+
+```
+
+#### ii) Control Group
+
+```{r}
+
+### Construct the consensus similarity matrix
+
+# total consensus matrix
+consensus_total_control <- compute_SNF(similarity_control)
+# consensus matrix of cancer
+consensus_cancer_control <- compute_SNF(similarity_control[names(similarity_control) %in% disease_types$C])
+# consensus matrix of autoimmune & inflammatory
+consensus_ai_control <- compute_SNF(similarity_control[names(similarity_control) %in% disease_types$AI])
+# consensus matrix of infectious
+consensus_inf_control <- compute_SNF(similarity_control[names(similarity_control) %in% disease_types$INF])
+# consensus matrix of metabolic
+consensus_meta_control <- compute_SNF(similarity_control[names(similarity_control) %in% disease_types$M])
+
+```
+
+### 3) Chord Diagram
+
+```{r}
+
+# List to keep colors of the grid based on the family of traits
+col_chord <- list()
+
+for (i in rownames(consensus_total_case)) {
+  list_index <- which(sapply(families, function(x) i %in% x))
+  col_chord <- append(col_chord,family_colors[[list_index]])
+}
+
+# Color of grids
+state_col2 = unlist(col_chord)
+names(state_col2) = c(rownames(consensus_total_case))
+
+# Family structure
+group <- structure(
+  rep(names(families), sapply(families, length)),
+  names = unlist(families))
+
+```
+
+```{r}
+
+# Function to plot chord diagram
+  
+cor_plot2 <- function(df, cutoff=0.05,highlight_chord = NULL) {
+  
+  #cutoff <- quantile(df,0.75)
+  
+  df_cut <- ifelse(abs(df) > cutoff, df, 0)
+  diag(df_cut) <- 0
+
+  col_fun <- colorRamp2(c(cutoff, max(df_cut)), c("#C9B2E4", "#3A0F73"))
+  
+
+  rows <- rownames(df_cut)
+  cols <- colnames(df_cut)
+  combinations <- expand.grid(Row = rows, Col = cols)
+  combinations$Value <- as.vector(df_cut)
+  combinations$Color <- col_fun(combinations$Value)
+  result <- combinations[, c("Row", "Col", "Color")]
+  
+  if (!is.null(highlight_chord)) {
+    result$Color[result$Row == highlight_chord[1] & result$Col == highlight_chord[2]] <- "#A6DBA0"
+    result$Color[result$Row == highlight_chord[2] & result$Col == highlight_chord[1]] <- "#A6DBA0"
+  }
+  
+  circos.clear()
+
+  chordDiagram(df_cut, big.gap=2,  symmetric = TRUE, order = rownames(df_cut),
+               directional = 1, transparency=0.5,
+               group = group, annotationTrack = c("grid", "axis"),
+               col = result,
+               grid.col = state_col2, preAllocateTracks = list(track.height = mm_h(4), track.margin = c(mm_h(4), 0)),
+               link.sort = TRUE, link.decreasing = TRUE)
+
+  circos.track(track.index = 2, panel.fun = function(x, y) {
+    sector.index = get.cell.meta.data("sector.index")
+    xlim = get.cell.meta.data("xlim")
+    ylim = get.cell.meta.data("ylim")
+    circos.text(mean(xlim), mean(ylim), sector.index, cex = 0.6, niceFacing = TRUE)
+    }, bg.border = NA)
+  
+  traits_in_diagram <- unique(rownames(df_cut)[rowSums(df_cut) != 0])
+  
+  
+  for (n in names(families)) {
+    if(length(traits_in_diagram[traits_in_diagram %in% families[[n]]])>0) {
+      highlight.sector(traits_in_diagram[traits_in_diagram %in% families[[n]]], track.index = 1, col = family_colors[[n]], 
+                   text = n, cex = 0.8, text.col = "white", niceFacing = TRUE)
+    }
+  }
+
+}
+
+```
+
+```{r}
+
+# Plot the chord diagram
+
+png("../Results/SNF/chord_diagrams_total-euc.png", width = 5000, height = 3000, res = 500)
+
+par(mfrow = c(1, 2), mar = c(1, 1, 1, 1)) 
+
+cor_plot2(consensus_total_case)
+title("Unified Consensus Matrix - Case")
+
+cor_plot2(consensus_total_control)
+title("Unified Consensus Matrix - Control")
+
+dev.off()
+
+
+png("../Results/SNF/chord_diagrams_diseasetypes-euc.png", width = 8000, height = 4000, res = 500)
+
+par(mfrow = c(2, 4), mar = c(1, 1, 1, 1)) 
+
+cor_plot2(consensus_cancer_case, highlight_chord=c('CA1','MM'))
+title("Unified Consensus Matrix - Cancer - Case")
+
+cor_plot2(consensus_ai_case, highlight_chord=c('CA2','A3S'))
+title("Unified Consensus Matrix - AI - Case")
+
+cor_plot2(consensus_inf_case, highlight_chord=c('CA1','A3S'))
+title("Unified Consensus Matrix - INF - Case")
+
+cor_plot2(consensus_meta_case, highlight_chord=c('THy','A3S'))
+title("Unified Consensus Matrix - M - Case")
+
+cor_plot2(consensus_cancer_control)
+title("Unified Consensus Matrix - Cancer - Control")
+
+cor_plot2(consensus_ai_control)
+title("Unified Consensus Matrix - AI - Control")
+
+cor_plot2(consensus_inf_control)
+title("Unified Consensus Matrix - INF - Control")
+
+cor_plot2(consensus_meta_control)
+title("Unified Consensus Matrix - M - Control")
+
+dev.off()
+
+```
+
+## 6. WGCNA
+
+### 1）Heatmap function
+
+```{r}
+
+# Create a color function based on standardized scale
+color_func <- circlize::colorRamp2(
+  c(-2, 0, 2),
+  c("#67a9cf", "#f7f7f7", "#ef8a62")
+)
+
+
+make_module_heatmap <- function(module_name, expression_mat, metadata_df,
+                                module_gene, module_eigengenes_df) {
+
+  
+  # Extract a vector of variables IDs that correspond to this module and group
+  df_comb <- metadata_df[, c('group', module_gene)]
+  
+  # Combine the eigengene data and the original data
+  df_comb <- cbind(df_comb, module_eigengenes_df[paste0('ME',module_name)])
+  
+  # Sort by group
+  df_comb <- dplyr::arrange(df_comb, group)
+
+  
+  # Create the ComplexHeatmap column annotation object
+  col_annot <- HeatmapAnnotation(
+    group = df_comb$group,  # Supply treatment labels
+    module_eigengene = anno_barplot(df_comb[[paste0('ME',module_name)]]),  # Add annotation barplot
+    col = list(group = c("case" = "#f1a340", "control" = "#998ec3"))  # Pick colors for each experimental group in time_point
+  )
+    
+  # Normalize the original values and keep for heatmap visualization
+  mod_mat <- t(scale(df_comb[, -c(1, ncol(df_comb))]))
+
+
+  # Plot on a heatmap
+  heatmap <- ComplexHeatmap::Heatmap(mod_mat,
+    name = paste0('ME',module_name),
+    # Supply color function
+    col = color_func,
+    # Supply column annotation
+    bottom_annotation = col_annot,
+    # We don't want to cluster samples
+    cluster_columns = FALSE,
+    # We don't need to show sample or gene labels
+    show_row_names = TRUE,
+    show_column_names = FALSE
+  )
+
+  # Return heatmap
+  return(heatmap)
+}
+```
+
+### 2) WGCNA function
+
+Return: list of variables in the most significant module
+
+```{r}
+
+## Function for WGCNA
+wgcna <- function(df, n) {
+  
+  df_raw <- df
+
+  df <- scale(df[, analy_traits])
+  
+  #rownames(df) <- df_raw$SampleID
+  
+  ### Determine Soft Thresholding Power
+  # Choosing a soft-threshold to fit a scale-free topology to the network
+  powers = c(c(1:10), seq(from = 12, to=20, by=2))
+  
+  # Call the network topology analysis function
+  sft=pickSoftThreshold(df, dataIsExpr = TRUE, powerVector = powers, corFnc = bicor, networkType = "unsigned")
+  
+  softPower = which.max(-sign(sft$fitIndices[,3])*sft$fitIndices[,2])
+  
+  
+  # Plot the soft cutoff results
+  sizeGrWindow(9, 5)
+  par(mfrow = c(1,2))
+  
+  # Scale-free topology fit index as a function of the soft-thresholding power
+  plot(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2],
+       xlab="Soft Threshold (power)", ylab="Scale Free Topology Model Fit, signed R^2",type="n", 
+       main = paste("Scale independence -",n))
+  text(sft$fitIndices[,1], -sign(sft$fitIndices[,3])*sft$fitIndices[,2], 
+       labels=powers, cex=0.9, col="red")
+  
+  abline(h=0.80,col="red")  # Red line corresponds to using an R^2 cut-off
+  
+  
+  # Mean connectivity as a function of the soft-thresholding power
+  plot(sft$fitIndices[,1], sft$fitIndices[,5],
+       xlab="Soft Threshold (power)", ylab="Mean Connectivity", type="n",
+       main = paste("Mean connectivity -",n))
+  text(sft$fitIndices[,1], sft$fitIndices[,5], labels=powers, cex=0.9,col="red")
+  
+  
+  
+  ### Generating adjacency and TOM similarity matrices based on the selected softpower
+  #calclute the adjacency matrix
+  adj= adjacency(df, type = "unsigned", power = softPower)
+  
+  #turn adjacency matrix into topological overlap to minimize the effects of noise and spurious associations
+  TOM=TOMsimilarity(adj)
+  
+  colnames(TOM) = rownames(TOM) = colnames(df)
+  dissTOM=1-TOM
+  
+  #hierarchical clustering of the genes based on the TOM dissimilarity measure
+  geneTree = hclust(as.dist(dissTOM), method = "average")
+  
+  # Module identification using dynamic tree cut
+  dynamicMods = cutreeDynamic(dendro = geneTree,  method="tree", minClusterSize = 5)
+  dynamicColors = labels2colors(dynamicMods)
+  
+  png(paste0("../Results/WGCNA/individual/",n,"_dendrogram.png"), width = 2500, height = 1600, res = 300)
+  
+  plotDendroAndColors(geneTree, dynamicColors, "Dynamic Tree Cut", dendroLabels = NULL, hang = 0.03, addGuide = TRUE, guideHang = 0.05, main = paste("Dendrogram and module colors -",n))
+  
+  dev.off()
+  
+  
+  
+  ### Which modules have biggest differences across treatment groups
+  module_eigengenes <- moduleEigengenes(df, colors = dynamicColors)$eigengenes
+  # Create the design matrix from the `group` variable
+  des_mat <- model.matrix(~ df_raw$group)
+  fit <- limma::lmFit(t(module_eigengenes), design = des_mat)
+  # Apply empirical Bayes to smooth standard errors, very practical in our case
+  fit <- limma::eBayes(fit)
+  # Apply multiple testing correction and obtain stats in a single object
+  stats_df <- limma::topTable(fit, number = ncol(module_eigengenes)) %>% tibble::rownames_to_column("module")
+  
+  # exploring moduls
+  ME_df <- cbind(module_eigengenes,df_raw['group'])
+  
+  stats_df <- stats_df %>%
+    dplyr::filter(module != "ME0" & module != "MEgrey") %>%
+    dplyr::arrange(adj.P.Val)
+  
+  if (nrow(stats_df) == 0) {
+    # Case: Only ME0 exists
+    print("No modules identified!")
+  } else {
+    top_module <- stats_df$module[1]
+    
+    # Get a vector of variables IDs that correspond to this (most significant) module
+    module_genes <- colnames(df)[dynamicColors == substr(top_module, 3, nchar(top_module))]
+    
+    
+    # a visual support
+    p1 <- ggplot(ME_df, aes(x = group, y = !!sym(top_module), color = group)) + geom_boxplot(width = 0.2, outlier.shape = NA) + ggforce::geom_sina(maxwidth = 0.3) + theme_classic()
+    
+    p2 <- make_module_heatmap(module_name = substr(top_module, 3, nchar(top_module)), expression_mat = df, metadata_df = df_raw, module_gene = module_genes, module_eigengenes_df = module_eigengenes)
+    
+    png(paste0("../Results/WGCNA/individual/",n,"_heatmap.png"), width = 4500, height = 2300, res = 300)
+    
+    grid.arrange(p1, grid.grabExpr(draw(p2)), ncol = 2,
+                 top = textGrob(n, gp = gpar(fontsize = 16, font = 2)))
+    
+    dev.off()
+    
+    return(module_genes)
+  }
+}
+
+
+```
+
+#### Implementation & Upset-Plot
+
+```{r}
+
+module_genes <- lapply(names(data_list), function(n) wgcna(df = data_list[[n]], n = n))
+
+names(module_genes) <- names(data_list)
+
+module_presence_matrix <- sapply(module_genes, function(x) {
+  as.integer(common_traits %in% x)
+})
+
+module_presence_df <- as.data.frame(module_presence_matrix)
+
+rownames(module_presence_df) <- common_traits
+```
+
+```{r}
+
+types <- rep(names(disease_types), sapply(disease_types, length))
+metadata <- as.data.frame(cbind(disease_order, types))
+names(metadata) <- c("sets", "disease")
+
+png("../Results/WGCNA/individual_UpSet.png", width = 5500, height = 4000, res = 500)
+
+upset(module_presence_df, 
+      #nintersects = 10, 
+      point.size = 2.7, line.size = 1, 
+      mainbar.y.label = "Intersections",
+      sets.x.label = "Glycan Compositions", 
+      text.scale = c(1.5, 1.5, 1.3, 1.5, 1.5, 1.5), 
+      matrix.color = "#0074B3", sets.bar.color = "#F47720", main.bar.color = "#F47720",
+      keep.order = TRUE, order.by = "degree", show.numbers = FALSE,
+      #sets = sets,
+      sets = disease_order, set_size.scale_max = 13,
+      set.metadata = list(data = metadata, plots = list(
+        list(type = "text", column = "disease", assign = 3, colors = type_colors, title = NULL),
+        list(type = "heat", column = "disease", assign = 7, colors = type_colors, alpha = 0.5, title = NULL),
+        list(type = "matrix_rows", column = "disease", colors = type_colors, alpha = 0.5))),
+      queries = list(
+        list(query = intersects, params = c('MASH','UC','PDAC','MM'), color="#951255",  active = T), # A2L
+        list(query = intersects, params = c('T2D','COVID19','RA','CD','AIH','BC','PC','MM'), color="#9C9C9C",  active = T), #A2E+CS
+        list(query = intersects, params = c('T2D','RA','CD','AIH','BC','CRC'), color="#00D187",  active = T), #Bisection
+        list(query = intersects, params = c('T2D','RA','CD','AIH','BC','CRC','MM'), color="#F6AF03",  active = T), # Bi-Fuco
+        list(query = intersects, params = c('T2D','COVID19','CD','AIH','BC','PC','MM'), color="#009462",  active = T), #Bi-Gala
+        list(query = intersects, params = c('MASH','LMS','UC','PDAC'), color="#DB6968",  active = T), #A3E
+        list(query = intersects, params = c('MASH','UC','PDAC'), color="#9C9C9C",  active = T), #Other Sia
+        list(query = intersects, params = c('LMS','CD','CRC'), color="#6BCCEF",  active = T), #Complex T
+        list(query = intersects, params = c('LMS','CD','AIH'), color="#6BCCEF",  active = T), #MM
+        list(query = intersects, params = c('UC'), color="#F6AF03",  active = T) #Other Fuco
+                    )
+      )
+
+
+dev.off()
+
+```
+
+### 3) Consensus WGCNA
+
+```{r}
+
+### Function of consensus WGCNA (to detect the shared modules in multiple datasets)
+
+consensus_wgcna <- function(df_list, n) {
+  
+  df_raw_list <- df_list
+  
+  for (i in 1:length(df_list)) {
+    df_list[[i]] <- list(
+      data = as.data.frame(scale(df_list[[i]][, analy_traits]))
+    )
+  }
+  
+  consensusModules <- blockwiseConsensusModules(df_list, power = 6, minModuleSize = 5,  networkType = "unsigned")
+  
+  png(paste0("../Results/WGCNA/consensus/",n,"_dendrogram.png"), width = 2500, height = 1600, res = 300)
+  
+  plotDendroAndColors(
+    dendro = as.hclust(consensusModules$dendrograms[[1]]),
+    colors = cbind(consensusModules$colors),
+    groupLabels = "Consensus modules",
+    main = paste("Consensus gene dendrogram and module colors -", n),
+    dendroLabels = analy_traits,
+    hang = 0.03,
+    addGuide = TRUE,
+    guideHang = 0.05
+  )
+  
+  dev.off()
+  
+  consensus_kME <- consensusKME(df_list, moduleLabels = consensusModules$colors, multiEigengenes = consensusModules$multiMEs)
+  
+  
+  ### Which modules have biggest differences across treatment groups
+  for (n in names(df_raw_list)) {
+    
+    df_raw <- df_raw_list[[n]]
+    module_eigengenes <- consensusModules$multiMEs[[n]]$data
+    dynamicColors <- consensusModules$colors
+    
+    # Create the design matrix from the `group` variable
+    des_mat <- model.matrix(~ df_raw$group)
+    fit <- limma::lmFit(t(module_eigengenes), design = des_mat)
+    # Apply empirical Bayes to smooth standard errors, very practical in our case
+    fit <- limma::eBayes(fit)
+    # Apply multiple testing correction and obtain stats in a single object
+    stats_df <- limma::topTable(fit, number = ncol(module_eigengenes)) %>% tibble::rownames_to_column("module")
+    
+    # exploring moduls
+    ME_df <- cbind(module_eigengenes,df_raw['group'])
+    
+    stats_df <- stats_df %>%
+      dplyr::filter(module != "ME0" & module != "MEgrey") %>%
+      dplyr::arrange(adj.P.Val)
+    
+    if (nrow(stats_df) == 0) {
+      # Case: Only ME0 exists
+      print("No modules identified!")
+    } else {
+      top_module <- stats_df$module[1]
+      
+      # Get a vector of variables IDs that correspond to this (most significant) module
+      module_genes <- names(dynamicColors)[dynamicColors == substr(top_module, 3, nchar(top_module))]
+      
+      
+      # a visual support
+      p1 <- ggplot(ME_df, aes(x = group, y = !!sym(top_module), color = group)) + geom_boxplot(width = 0.2, outlier.shape = NA) + ggforce::geom_sina(maxwidth = 0.3) + theme_classic()
+      
+      p2 <- make_module_heatmap(module_name = substr(top_module, 3, nchar(top_module)), expression_mat = df, metadata_df = df_raw, module_gene = module_genes, module_eigengenes_df = module_eigengenes)
+      
+      png(paste0("../Results/WGCNA/consensus/",n,"_heatmap.png"), width = 4500, height = 2300, res = 300)
+      
+      grid.arrange(p1, grid.grabExpr(draw(p2)), ncol = 2,
+                   top = textGrob(n, gp = gpar(fontsize = 16, font = 2)))
+      
+      dev.off()
+      
+    }
+    
+  }
+  
+  return(consensus_kME)
+}
+```
+
+cWGCNA implementation.
+
+```{r}
+
+conw_C <- consensus_wgcna(data_list[names(data_list) %in% disease_types$C], 'C')
+
+conw_AI <- consensus_wgcna(data_list[names(data_list) %in% disease_types$AI], 'AI')
+
+conw_INF <- consensus_wgcna(data_list[names(data_list) %in% disease_types$INF], 'INF')
+
+conw_M <- consensus_wgcna(data_list[names(data_list) %in% disease_types$M], 'M')
+
+consensus_wgcna(data_list, 'All')
+
+consensus_wgcna(data_list[names(data_list) %in% c('CRC','PC','BC','PDAC')], 'Solid C')
+
+```
+
+## 7. Global PCA
+
+### 1) Prepare data
+
+```{r}
+
+
+df_all_case <- bind_rows(
+  lapply(data_list, function(df) df[df$group=="case", analy_traits]), .id = "disease")
+
+df_all_control <- bind_rows(
+  lapply(data_list, function(df) df[df$group=="control", analy_traits]), .id = "disease")
+
+df_all_control$disease <- 'control'
+
+df_all <- rbind(df_all_case,df_all_control)
+
+group <- df_all$disease
+
+data_numeric <- df_all[,-1]
+
+```
+
+### 2) gPCA implementation
+
+```{r}
+
+pca_result <- prcomp(data_numeric, scale = TRUE)
+
+# Print PCA summary
+summary(pca_result)
+
+scores <- as.data.frame(pca_result$x)  # First 2 PCs for samples
+scores$Group <- group  # Add group information back
+
+loadings <- as.data.frame(pca_result$rotation)  # First 2 PCs for variables
+loadings$Variable <- rownames(loadings)
+loadings$Family <- NA
+for (family in names(families)) {
+  loadings$Family[loadings$Variable %in% families[[family]]] <- family
+}
+
+
+pc_range <- max(abs(range(c(scores$PC1, scores$PC2))))
+loading_range <- max(abs(range(c(loadings[,1], loadings[,2]))))
+auto_scale <- pc_range / loading_range * 0.3  # 0.8是调节因子
+
+  
+scores$Group <- factor(scores$Group, levels = c(disease_order,'control'))
+
+variances <- (pca_result$sdev^2)/sum(pca_result$sdev^2)
+
+colnames(scores)[1:20] <- paste(colnames(scores[1:20]), sprintf("%.2f%%", variances * 100), sep = ", ")
+
+
+
+```
+
+```{r}
+panel_custom <- function(x, y) {
+  points(x, y, pch = 20, cex = 0.5, col=c(disease_colors, control = '#FEF295')[as.character(scores[,21])])
+}
+
+
+png("../Results/cPCA/gPCA_scores.png", width = 6000, height = 4000, res = 300)
+pairs(scores[,1:5], panel = panel_custom,upper.panel = NULL)
+dev.off()
+
+```
+
+## 8. Contrastive PCA
+
+### 1) Data preparation
+
+Same as the gPCA.
+
+### 2) cPCA function
+
+```{r}
+
+
+cPCA <- function(X_target, Y_background, alpha = 1, scale = TRUE, center = TRUE, ncomp = NULL) {
+  # Preprocess
+  X <- scale(X_target[,-1], center = center, scale = scale)
+  Y <- scale(Y_background[,-1], center = center, scale = scale)
+
+  # Covariances
+  cov_X <- cov(X)
+  cov_Y <- cov(Y)
+
+  # Contrastive covariance matrix
+  cov_c <- cov_X - alpha * cov_Y
+
+  # Eigen decomposition
+  eig <- eigen(cov_c)
+  V <- eig$vectors  # eigenvectors
+
+  # Optional limit on components
+  if (!is.null(ncomp)) {
+    V <- V[, 1:ncomp, drop = FALSE]
+  }
+  
+  # Project datasets
+  scores_X <- X %*% V
+  scores_Y <- Y %*% V
+
+  # Compute per-component variance breakdown
+  var_target     <- diag(t(V) %*% cov_X %*% V)
+  var_background <- diag(t(V) %*% cov_Y %*% V)
+  contrastive_variance <- var_target - alpha * var_background
+  
+
+  # Return
+  list(
+    eigenvectors = V,
+    eigenvalues = eig$values[1:ncomp], 
+    var_target = var_target,
+    var_background = var_background,
+    contrastive_variance = contrastive_variance,
+    scores_target = scores_X,
+    scores_background = scores_Y,
+    alpha = alpha,
+    X_target = X_target,
+    Y_background = Y_background,
+    center = attr(X, "scaled:center"),
+    scale = attr(X, "scaled:scale")
+  )
+  
+  
+}
+  
+```
+
+### 3) Plot function
+
+```{r}
+
+cPCA_plot <- function(alpha){
+  
+  # Conduct cPCA
+  res <- cPCA(X_target = df_all_case, Y_background = df_all_control, ncomp=10, alpha = alpha)
+  
+  # Plot the score figure
+  # Only select the top five PCs
+  df_plot <- rbind(
+    data.frame(res$scores_target[, 1:5], group = "case") %>% bind_cols(df_all_case %>% select(disease)),
+    data.frame(res$scores_background[, 1:5], group = "control")%>% bind_cols(df_all_control %>% select(disease))
+  )
+  
+  names(df_plot)[1:5] <- c("cPC1", "cPC2", "cPC3", "cPC4", "cPC5")
+  
+  levels(df_plot$disease) <- c(disease_order,"control")
+  
+  df_plot[df_plot$group=='control',]$disease <- 'control'
+  
+  df_plot$disease <- factor(df_plot$disease, levels = c(disease_order,'control'))
+  
+  # extract loadings
+  loadings <- as.data.frame(res$eigenvectors[, 1:2])  # First 2 PCs for variables
+  colnames(loadings) <- c('cPC1','cPC2')
+  rownames(loadings) <- colnames(df_all_case[,-1])
+  loadings$Variable <- rownames(loadings)
+  loadings$Family <- NA
+  for (family in names(families)) {
+    loadings$Family[loadings$Variable %in% families[[family]]] <- family
+  }
+  loadings$length <- sqrt(loadings[,1]^2 + loadings[,2]^2) # Add loadings' magnitude
+
+  
+  
+  # Score plot
+  p <- ggplot(df_plot, aes(x = cPC1, y = cPC2, color = disease)) +
+    geom_point(size = 1) +
+    labs(title = paste("cPCA (alpha=",alpha,")"), x = "cPC1", y = "cPC2") +
+    scale_color_manual(values=c(disease_colors, control = '#FEF295'))+
+    theme_minimal() + stat_ellipse() + theme( legend.position = "bottom") + guides(color = guide_legend(nrow = 1))
+  
+  p <- ggMarginal(p, type = 'density', groupColour = T, groupFill = T)
+  ggsave(paste0("../Results/cPCA/cPCA_scores(alpha=",alpha,").png"), p, width = 14, height = 8, dpi = 300)
+  
+  
+  # Calculate statistics index of scores for later centroids visualization
+  summary_stats <- df_plot %>%
+    group_by(disease) %>%
+    summarise(x_mean = mean(cPC1), y_mean = mean(cPC2), 
+              x_min = min(cPC1), x_max = max(cPC1),
+              y_min = min(cPC2), y_max = max(cPC2),
+              x_ci_lower = mean(cPC1) - 1.96 * sd(cPC1) / sqrt(n()),
+              x_ci_upper = mean(cPC1) + 1.96 * sd(cPC1) / sqrt(n()),
+              y_ci_lower = mean(cPC2) - 1.96 * sd(cPC2) / sqrt(n()),
+              y_ci_upper = mean(cPC2) + 1.96 * sd(cPC2) / sqrt(n()),
+              x_se = sd(cPC1) / sqrt(n()), 
+              y_se = sd(cPC2) / sqrt(n()), .groups = 'drop')
+  
+  
+  # Scores with centroids
+  p <- ggplot() +
+    
+    geom_point(data = df_plot, aes(x = cPC1, y = cPC2, color = disease), 
+               alpha = 0.1, size = 1.5) +
+    
+    geom_point(data = summary_stats, aes(x = x_mean, y = y_mean, color = disease), 
+               size = 4, shape = 19, show.legend = FALSE) +
+    
+    geom_text_repel(data = summary_stats,
+                    aes(x = x_mean, y = y_mean, label = disease, color=disease), 
+                    #color = loadings$Arrow_Color,
+                    size = 4,
+                    alpha = 1,
+                    max.overlaps = 100, inherit.aes = FALSE,
+                    show.legend = FALSE) + 
+    
+    geom_errorbar(data = summary_stats, 
+                  aes(x = x_mean, y = y_mean, 
+                      xmin = x_mean - 10*x_se, xmax = x_mean + 10*x_se, color = disease),
+                  width = 0.1) +
+    
+    geom_errorbar(data = summary_stats, 
+                  aes(x = x_mean, y = y_mean, 
+                      ymin = y_mean - 10*y_se, ymax = y_mean + 10*y_se, color = disease),
+                  width = 0.1) +
+    
+    labs(title = paste("cPCA (alpha=",alpha,")"), x = "cPC1", y = "cPC2") +
+    scale_color_manual(values=c(disease_colors, control = '#FEF295'))+
+    theme_minimal() + stat_ellipse() + theme( legend.position = "bottom") + guides(color = guide_legend(nrow = 1))
+  
+  p <- ggMarginal(p,type = 'density', groupColour = T, groupFill = T)
+  
+  ggsave(paste0("../Results/cPCA/scores(alpha=",alpha,").png"), p, width = 14, height = 8, dpi = 300)
+  
+  # Loadings magnitude lolliplot
+  p <- ggplot(loadings, aes(x = reorder(Variable, length), y = length, color = Family)) +
+    geom_segment(aes(xend = Variable, y = 0, yend = length), linewidth = 0.7) +
+    geom_point(size = 3) +
+    coord_flip() +
+    theme_minimal() +
+    labs(x = NULL, y = NULL , title = "Loadings magnitude", color = "Family") +
+    theme(
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 0.6),
+      panel.background = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor.x = element_blank(), 
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor.y = element_blank(), 
+      axis.text.x = element_blank(),  
+      axis.ticks.x = element_blank(),  
+      plot.title = element_text(hjust = 0.5),
+      axis.text.y = element_markdown(size = 10)
+    ) + scale_color_manual(values=family_colors)
+  
+  ggsave(paste0("../Results/cPCA/loading_magnitude(alpha=",alpha,").png"), p, width = 5, height = 6, dpi = 300, bg = "white")
+  
+}
+      
+```
+
+```{r}
+alphas <- 10^seq(0, 1, length.out = 7) 
+#alphas <- 1:10
+
+lapply(alphas, cPCA_plot)
+```
+
+### 4) gcPCA function
+
+```{r}
+# Generalized contrastive PCA (gcPCA) function
+gcPCA <- function(Ra, Rb, method = 'v4', Ncalc = Inf, Nshuffle = 0, normalize_flag = TRUE,
+                  alpha = 1, alpha_null = 0.975, cond_number = 1e13, verbose = TRUE) {
+  
+  # Internal function to normalize data using L2 norm (Euclidean)
+  normalize <- function(data) {
+    data <- scale(data) # Center and scale columns
+    data <- data / norm(data, type = "2") # Normalize overall L2 norm
+    return(data)
+  }
+  
+  inspect_inputs <- function(Ra, Rb) {
+    if (ncol(Ra) != ncol(Rb)) stop("Ra and Rb must have the same number of features")
+    
+    if (normalize_flag) {
+      Ra <- normalize(Ra)
+      Rb <- normalize(Rb)
+    }
+    
+    # Determine how many gcPCs can be computed (limited by data rank)
+    n_gcpcs <- min(nrow(Ra), nrow(Rb))
+    RaRb <- rbind(Ra, Rb)
+    svd_result <- svd(RaRb)
+    Sab <- svd_result$d
+    tol <- max(dim(RaRb)) * .Machine$double.eps * max(Sab)
+    
+    if (sum(Sab > tol) < n_gcpcs) {
+      warning("Input data is rank-deficient! Discarding dimensions.")
+      n_gcpcs <- sum(Sab > tol)
+    }
+    
+    # Basis vectors for projection (top right singular vectors)
+    J <- svd_result$v[, 1:n_gcpcs, drop = FALSE]
+    
+    if (method %in% c('v2.1', 'v3.1', 'v4.1')) {
+      n_gcpcs <- min(Ncalc, n_gcpcs)
+      if (verbose) message(n_gcpcs, " gcPCs will be returned.")
+    }
+    
+    list(n_gcpcs = n_gcpcs, J = J, Ra = Ra, Rb = Rb)
+  }
+  
+  # Core gcPCA computation
+  fit <- function(Ra, Rb) {
+    inspected <- inspect_inputs(Ra, Rb)
+    Ra <- inspected$Ra; Rb <- inspected$Rb
+    J <- inspected$J
+    n_gcpcs <- inspected$n_gcpcs
+    
+    # Compute covariance matrices
+    RaRa <- crossprod(Ra) / (nrow(Ra) - 1)
+    RbRb <- crossprod(Rb) / (nrow(Rb) - 1)
+    
+    # --- Simple contrastive version ---
+    if (method == 'v1') {
+      JRaRaJ <- t(J) %*% RaRa %*% J
+      JRbRbJ <- t(J) %*% RbRb %*% J
+      sigma <- JRaRaJ - alpha * JRbRbJ
+      eig <- eigen(sigma, symmetric = TRUE)
+      w <- eig$values
+      v <- eig$vectors
+      eig_idx <- order(w, decreasing = TRUE)
+      x <- J %*% v[, eig_idx]
+      s_total <- w[eig_idx]
+      obj_info <- 'Ra - alpha * Rb'
+
+      # --- Generalized contrastive PCA versions ---      
+    } else {
+      denom_well_conditioned <- FALSE
+      ortho_column_order <- c()
+      count_dim <- 0
+      x <- NULL
+      x_orth <- NULL
+      
+      # Iterate to extract components one by one
+      for (idx in 1:n_gcpcs) {
+        JRaRaJ <- t(J) %*% RaRa %*% J
+        JRbRbJ <- t(J) %*% RbRb %*% J
+        
+        # Define numerator and denominator for generalized Rayleigh quotient
+        if (method %in% c('v2', 'v2.1')) {
+          numerator <- JRaRaJ; denominator <- JRbRbJ
+          obj_info <- 'Ra / Rb'
+        } else if (method %in% c('v3', 'v3.1')) {
+          numerator <- JRaRaJ - JRbRbJ; denominator <- JRbRbJ
+          obj_info <- '(Ra-Rb) / Rb'
+        } else if (method %in% c('v4', 'v4.1')) {
+          numerator <- JRaRaJ - JRbRbJ; denominator <- JRaRaJ + JRbRbJ
+          obj_info <- '(Ra-Rb) / (Ra+Rb)'
+        } else stop("Unrecognized method.")
+        
+        if (!denom_well_conditioned) {
+          if (kappa(denominator) > cond_number) {
+            warning("Denominator ill-conditioned. Regularizing.")
+            w <- eigen(denominator, symmetric = TRUE)$values
+            alpha <- max(w[1] / cond_number - tail(w, 1), 0)
+            denominator <- denominator + diag(nrow(denominator)) * alpha
+          }
+          denom_well_conditioned <- TRUE
+        }
+        
+        # Whitening the denominator
+        eig_den <- eigen(denominator, symmetric = TRUE)
+        d <- eig_den$values
+        d[d < 0] <- 0
+        e <- eig_den$vectors
+        M <- e %*% diag(sqrt(d)) %*% t(e)
+        Minv <- tryCatch(solve(M), error = function(e) solve(M + diag(nrow(M)) * 1e-6))
+        sigma <- t(Minv) %*% numerator %*% Minv
+        
+        # Solve eigenproblem in transformed space
+        eig <- eigen(sigma, symmetric = TRUE)
+        w <- eig$values
+        v <- eig$vectors
+        eig_idx <- order(w, decreasing = TRUE)
+        v <- v[, eig_idx]
+        x_temp <- J %*% Minv %*% v
+        x_temp <- x_temp / norm(x_temp, type = "2")
+        
+        # Orthogonalize and select directions
+        if (idx == 1) {
+          x <- x_temp
+          x_orth <- matrix(x_temp[, 1], ncol = 1)
+          ortho_column_order <- c(ortho_column_order, count_dim)
+          count_dim <- count_dim + 1
+        } else {
+          if (idx %% 2 == 1) {
+            x_add <- matrix(x_temp[, ncol(x_temp)], ncol = 1)
+            ortho_column_order <- c(ortho_column_order, ncol(x_temp) + count_dim - 1)
+          } else {
+            x_add <- matrix(x_temp[, 1], ncol = 1)
+            ortho_column_order <- c(ortho_column_order, count_dim)
+            count_dim <- count_dim + 1
+          }
+          x_orth <- cbind(x_orth, x_add)
+        }
+        
+        if ((ncol(J) - ncol(x_orth)) < 1) break  # avoid shrinking to zero cols
+        j <- svd(J - x_orth %*% t(x_orth) %*% J)$u
+        J <- j[, 1:(ncol(J) - 1), drop = FALSE]
+      }
+      
+      if (method %in% c('v2.1', 'v3.1', 'v4.1')) {
+        new_column_order <- order(ortho_column_order)
+        x <- x_orth[, new_column_order, drop = FALSE]
+      }
+      
+      # Compute scores and objective values
+      RaX <- Ra %*% x
+      RbX <- Rb %*% x
+      XRaRaX <- crossprod(RaX)
+      XRbRbX <- crossprod(RbX)
+      
+      if (method %in% c('v2', 'v2.1')) {
+        numerator_orig <- XRaRaX; denominator_orig <- XRbRbX
+      } else if (method %in% c('v3', 'v3.1')) {
+        numerator_orig <- XRaRaX - XRbRbX; denominator_orig <- XRbRbX
+      } else if (method %in% c('v4', 'v4.1')) {
+        numerator_orig <- XRaRaX - XRbRbX; denominator_orig <- XRaRaX + XRbRbX
+      }
+      
+      s_total <- diag(numerator_orig) / diag(denominator_orig)
+    }
+    
+    # Return loadings, scores, and diagnostics
+    list(loadings = x,
+         Ra_scores = Ra %*% x / norm(Ra %*% x, type = "2"),
+         Ra_values = norm(Ra %*% x, type = "2"),
+         Rb_scores = Rb %*% x / norm(Rb %*% x, type = "2"),
+         Rb_values = norm(Rb %*% x, type = "2"),
+         objective_function = obj_info,
+         objective_values = s_total,
+         null_gcpca_values = if (Nshuffle > 0) null_distribution(Ra, Rb) else NULL)
+  }
+  
+  null_distribution <- function(Ra, Rb) {
+    null_vals <- NULL
+    for (i in 1:Nshuffle) {
+      Ra_shuf <- Ra[sample(nrow(Ra)), ]
+      Rb_shuf <- Rb[sample(nrow(Rb)), ]
+      fit_result <- fit(Ra_shuf, Rb_shuf)
+      null_vals <- rbind(null_vals, fit_result$objective_values)
+    }
+    null_vals
+  }
+  
+  fit(Ra, Rb)
+}
+```
+
+```{r}
+
+res <- gcPCA(Ra=df_all_case[,-1], Rb=df_all_control[,-1])
+
+# Plot the score figure
+df_plot <- rbind(
+  data.frame(res$Ra_scores[, 1:5], group = "case") %>% bind_cols(df_all_case %>% select(disease)),
+  data.frame(res$Rb_scores[, 1:5], group = "control")%>% bind_cols(df_all_control %>% select(disease))
+)
+  
+names(df_plot)[1:5] <- c("cPC1", "cPC2", "cPC3", "cPC4", "cPC5")
+  
+levels(df_plot$disease) <- c(disease_order,"control")
+  
+df_plot[df_plot$group=='control',]$disease <- 'control'
+  
+df_plot$disease <- factor(df_plot$disease, levels = c(disease_order,'control'))
+  
+loadings <- as.data.frame(res$loadings[, 1:2])  # First 2 PCs for variables
+colnames(loadings) <- c('cPC1','cPC2')
+rownames(loadings) <- colnames(df_all_case[,-1])
+loadings$Variable <- rownames(loadings)
+loadings$Family <- NA
+for (family in names(families)) {
+  loadings$Family[loadings$Variable %in% families[[family]]] <- family
+}
+loadings$length <- sqrt(loadings[,1]^2 + loadings[,2]^2)
+  
+  
+# Score plot
+p <- ggplot(df_plot, aes(x = cPC1, y = cPC2, color = disease)) +
+  geom_point(size = 1) +
+  labs(title = "gcPCA_scores", x = "cPC1", y = "cPC2") +
+  scale_color_manual(values=c(disease_colors, control = '#FEF295'))+
+  theme_minimal() + stat_ellipse() + theme( legend.position = "bottom") + guides(color = guide_legend(nrow = 1))
+  
+p <- ggMarginal(p, type = 'density', groupColour = T, groupFill = T)
+ggsave("../Results/cPCA/gcPCA_scores.png", p, width = 14, height = 8, dpi = 300)
+  
+summary_stats <- df_plot %>%
+  group_by(disease) %>%
+  summarise(x_mean = mean(cPC1), y_mean = mean(cPC2), 
+            x_min = min(cPC1), x_max = max(cPC1),
+            y_min = min(cPC2), y_max = max(cPC2),
+            x_ci_lower = mean(cPC1) - 1.96 * sd(cPC1) / sqrt(n()),
+            x_ci_upper = mean(cPC1) + 1.96 * sd(cPC1) / sqrt(n()),
+            y_ci_lower = mean(cPC2) - 1.96 * sd(cPC2) / sqrt(n()),
+            y_ci_upper = mean(cPC2) + 1.96 * sd(cPC2) / sqrt(n()),
+            x_se = sd(cPC1) / sqrt(n()), 
+            y_se = sd(cPC2) / sqrt(n()), .groups = 'drop')
+  
+  
+p <- ggplot() +
+    
+  geom_point(data = df_plot, aes(x = cPC1, y = cPC2, color = disease), 
+              alpha = 0.1, size = 1.5) +
+    
+  geom_point(data = summary_stats, aes(x = x_mean, y = y_mean, color = disease), 
+              size = 4, shape = 19, show.legend = FALSE) +
+    
+  geom_text_repel(data = summary_stats,
+                  aes(x = x_mean, y = y_mean, label = disease, color=disease), 
+                  #color = loadings$Arrow_Color,
+                  size = 4,
+                  alpha = 1,
+                  max.overlaps = 100, inherit.aes = FALSE,
+                  show.legend = FALSE) + 
+    
+  geom_errorbar(data = summary_stats, 
+                aes(x = x_mean, y = y_mean, 
+                    xmin = x_mean - 10*x_se, xmax = x_mean + 10*x_se, color = disease),
+                width = 0.005) +
+    
+  geom_errorbar(data = summary_stats, 
+                aes(x = x_mean, y = y_mean, 
+                    ymin = y_mean - 10*y_se, ymax = y_mean + 10*y_se, color = disease),
+                width = 0.005) +
+    
+  labs(title = 'gcPCA_scores', x = "cPC1", y = "cPC2") +
+  scale_color_manual(values=c(disease_colors, control = '#FEF295'))+
+  theme_minimal() + stat_ellipse() + theme( legend.position = "bottom") + guides(color = guide_legend(nrow = 1))
+  
+p <- ggMarginal(p,type = 'density', groupColour = T, groupFill = T)
+  
+ggsave("../Results/cPCA/gcPCA_scores_centroids.png", p, width = 14, height = 8, dpi = 300)
+  
+p <- ggplot(loadings, aes(x = reorder(Variable, length), y = length, color = Family)) +
+  geom_segment(aes(xend = Variable, y = 0, yend = length), linewidth = 0.7) +
+  geom_point(size = 3) +
+  coord_flip() +
+  theme_minimal() +
+  labs(x = NULL, y = NULL , title = "Loadings magnitude", color = "Family") +
+  theme(
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.6),
+    panel.background = element_blank(),
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor.x = element_blank(), 
+    panel.grid.major.y = element_blank(),
+    panel.grid.minor.y = element_blank(), 
+    axis.text.x = element_blank(),  
+    axis.ticks.x = element_blank(),  
+    plot.title = element_text(hjust = 0.5),
+    axis.text.y = element_markdown(size = 10)
+  ) + scale_color_manual(values=family_colors)
+  
+ggsave("../Results/cPCA/gcPCA_loadings.png", p, width = 5, height = 6, dpi = 300, bg = "white")
+     
+```
+
+## 9. DMFA
+
+### 1) Data Preparation, DMFA Implementation and Results Extraction
+
+Prepare the dataset binding all datasets from different studies.
+
+```{r}
+
+df_all_case <- bind_rows(
+  lapply(data_list, function(df) df[df$group=="case", analy_traits]), .id = "disease")
+
+df_all <- bind_rows(
+  lapply(data_list, function(df) df[, analy_traits]), .id = "disease")
+
+dmfa_case <- DMFA(df_all_case, 
+             num.fact = 1,
+             graph = FALSE)
+
+dmfa_all <- DMFA(df_all, 
+             num.fact = 1,
+             graph = FALSE)
+
+
+# Extract Variance
+eigenvalues <- dmfa_all$eig[,1]
+prop_var <- eigenvalues / sum(eigenvalues) * 100
+
+
+## Score data
+# Convert DMFA coordinates to a dataframe
+dmfa_coords <- data.frame(
+  x = dmfa_all$ind$coord[,1],
+  y = dmfa_all$ind$coord[,2],
+  group = df_all$disease
+)
+
+# Change the disease order
+dmfa_coords$group <- factor(dmfa_coords$group, levels = disease_order)
+
+
+## Loading data
+# Combine data from all groups
+dmfa_loadings <- data.frame()
+for(i in 1:length(dmfa_all$var.partiel)) {
+  loadings <- as.matrix(dmfa_all$var.partiel[[i]])
+  group_data <- data.frame(
+    Variable = rownames(loadings),
+    Dim1 = loadings[, 1],
+    Dim2 = loadings[, 2],
+    Group = names(dmfa_all$var.partiel)[[i]]
+  )
+  dmfa_loadings <- rbind(dmfa_loadings, group_data)
+}
+
+# Create unit circle coordinates
+theta <- seq(0, 2*pi, length.out = 100)
+circle_data <- data.frame(
+  x = cos(theta),
+  y = sin(theta)
+)
+
+dmfa_loadings$Group <- factor(dmfa_loadings$Group, levels = unlist(disease_types))
+
+
+```
+
+```{r}
+### Calculate variances of coordinates for variables
+
+dims = c(1, 2)
+n_groups <- length(dmfa_case$var.partiel)
+n_vars <- nrow(dmfa_case$var.partiel[[1]])
+  
+# Store coordinates for each variable across groups
+coords_by_var <- array(NA, dim = c(n_vars, 2, n_groups))
+  
+  # Extract coordinates for each group
+for(i in 1:n_groups) {
+  coords <- as.matrix(dmfa_case$var.partiel[[i]])
+  coords_by_var[,,i] <- coords[, dims]
+}
+  
+# Calculate variance in position for each variable
+position_variance <- data.frame(
+  Variable = rownames(dmfa_case$var.partiel[[1]]),
+  Variance_Dim1 = apply(coords_by_var[,1,], 1, var),
+  Variance_Dim2 = apply(coords_by_var[,2,], 1, var),
+  Total_Variance = apply(coords_by_var[,1,], 1, var) + 
+                    apply(coords_by_var[,2,], 1, var)
+)
+  
+# Sort by total variance
+position_variance <- position_variance[order(position_variance$Total_Variance, decreasing = TRUE),]
+
+print(position_variance)
+
+```
+
+### 2) Plot loadings for common traits
+
+```{r}
+plot_list <- list(
+  Fucosylation = c('A3F','A3Fa','CFa'),
+  Sialylation = c('A3E','A4E','A3L','A4L'),
+  Bi_antennaty = c('A2G','A2E','A2L','A2F','CB'),
+  Complexity = c('THy','TM','TC','MM')
+)
+
+
+for (n in names(plot_list)) {
+  
+  data <- dmfa_loadings[dmfa_loadings$Variable %in% plot_list[[n]],]
+  
+  p <- ggplot(data, aes(x = Dim1, y = Dim2, color = Group)) +
+    
+    geom_hline(yintercept = 0, color = "gray70") +
+    geom_vline(xintercept = 0, color = "gray70") +
+    
+    geom_point(data = data, size = 1.5, aes(x = Dim1, y = Dim2,color= Group,shape = Variable), alpha = 1) + 
+    
+    geom_text_repel(data = data,
+                    aes(x = Dim1, y = Dim2, label = Variable, color=Group),
+                    size = 3,
+                    alpha = 1,
+                    max.overlaps = 100,
+                    show.legend = FALSE) +
+    
+    theme_minimal() +
+    theme(legend.position = "right") +
+    labs(
+      title = paste(n,' Traits'),
+      x = sprintf("Dimension %d (%.1f%%)", 1, prop_var[1]),
+      y = sprintf("Dimension %d (%.1f%%)", 2, prop_var[2]),
+      color = 'group'
+    ) + scale_color_manual(values=disease_colors) + scale_shape_discrete()
+
+  ggsave(paste0("../Results/DMFA/DMFA_Loadings_",n,".png"), p, width = 7, height = 5, dpi = 300, bg = "white")
+  
+}
+
+```

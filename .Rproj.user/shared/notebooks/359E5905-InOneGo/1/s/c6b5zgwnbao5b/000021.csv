@@ -1,0 +1,2 @@
+"0","# consensus matrix of metabolic"
+"0","consensus_meta_case <- compute_SNF(similarity_case[names(similarity_case) %in% disease_types$M])"

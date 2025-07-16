@@ -1,0 +1,2 @@
+"0","# consensus matrix of cancer"
+"0","consensus_cancer_case <- compute_SNF(similarity_case[names(similarity_case) %in% disease_types$C])"
